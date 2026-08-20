@@ -12,14 +12,12 @@ const client = new Client({
     partials: [Partials.Message, Partials.Channel] 
 });
 
-// Mengambil konfigurasi dari Environment Variables di Railway
+// Mengambil variabel lingkungan dari Railway
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL;
-const TARGET_CHANNEL_ID = process.env.TARGET_CHANNEL_ID; // Channel untuk pencatatan keuangan
+const TARGET_CHANNEL_ID = process.env.TARGET_CHANNEL_ID; 
+const INTERACTION_CHANNEL_ID = process.env.INTERACTION_CHANNEL_ID || '1463961470344757336'; 
 
-// Channel khusus untuk interaksi/sapaan otomatis
-const INTERACTION_CHANNEL_ID = process.env.INTERACTION_CHANNEL_ID || '1463961470344757336';
-
-// List pesan interaksi acak yang genit, centil, dan penuh gombalan
+// List pesan gombalan dan sapaan acak (Terbaru: 30 Kata-kata)
 const INTERACTION_MESSAGES = [
     "Aduh {user}, kamu tau gak bedanya kamu sama shift duty? Kalo duty ada selesainya, kalo cintaku ke kamu gak ada selesainya~ 🙈💖",
     "Udah berapa lama duty-nya hari ini {user}? Jangan kecapekan dong, nanti siapa yang nemenin aku di masa depan? 🥹✨",
@@ -58,17 +56,12 @@ async function sendRandomInteraction(channel) {
     try {
         if (!channel || !channel.guild) return;
 
-        // Fetch seluruh member di server
         const members = await channel.guild.members.fetch();
-        // Filter agar tidak ngetag bot
         const nonBotMembers = members.filter(member => !member.user.bot);
 
         if (nonBotMembers.size === 0) return;
 
-        // Pilih 1 member acak
         const randomMember = nonBotMembers.random();
-
-        // Pilih 1 template pesan acak
         const randomTemplate = INTERACTION_MESSAGES[Math.floor(Math.random() * INTERACTION_MESSAGES.length)];
         const messageToSend = randomTemplate.replace('{user}', `<@${randomMember.id}>`);
 
@@ -78,23 +71,19 @@ async function sendRandomInteraction(channel) {
     }
 }
 
-// Event saat Bot berhasil online
+// Event saat Bot On
 client.once(Events.ClientReady, (readyClient) => {
-    console.log(`Bot Keuangan & Interaksi Aktif! Logged in as ${readyClient.user.tag}`);
+    console.log(`Bot Duty Mekanik Aktif! Logged in as ${readyClient.user.tag}`);
 
-    // Set interval pengecekan setiap 3 jam (3 * 60 * 60 * 1000 ms)
+    // Penjadwalan Otomatis 3 Jam Sekali (Antara 06:00 - 23:59 WIB)
     const THREE_HOURS = 3 * 60 * 60 * 1000;
-
     setInterval(async () => {
         try {
-            // Ambil jam saat ini dalam zona waktu WIB (Asia/Jakarta)
             const now = new Date();
             const options = { timeZone: 'Asia/Jakarta', hour: '2-digit', hour12: false };
             const currentHour = parseInt(new Intl.DateTimeFormat('en-US', options).format(now), 10);
 
-            // Cek apakah jam saat ini antara 06:00 sampai 23:59 WIB
             if (currentHour >= 6 && currentHour <= 23) {
-                // Kirim ke channel interaksi khusus
                 const channel = await client.channels.fetch(INTERACTION_CHANNEL_ID);
                 if (channel) {
                     await sendRandomInteraction(channel);
@@ -106,76 +95,71 @@ client.once(Events.ClientReady, (readyClient) => {
     }, THREE_HOURS);
 });
 
-// Event saat ada pesan masuk di Discord
+// Handling Pesan & Command Discord
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
+    const command = message.content.trim().toLowerCase();
+
     // ----------------------------------------------------
     // FITUR MANUAL COMMAND: !novo
-    // Bekerja jika diketik di INTERACTION_CHANNEL_ID atau TARGET_CHANNEL_ID
     // ----------------------------------------------------
-    if (message.content.trim().toLowerCase() === '!novo') {
+    if (command === '!novo') {
         const targetChannel = await client.channels.fetch(INTERACTION_CHANNEL_ID).catch(() => message.channel);
         await sendRandomInteraction(targetChannel);
         return;
     }
 
     // ----------------------------------------------------
-    // FITUR CATATAN KEUANGAN (+ / -)
-    // Hanya berjalan di TARGET_CHANNEL_ID
+    // FITUR DUTY MEKANIK (!on, !off, !list, !reset / !restart)
     // ----------------------------------------------------
     if (message.channel.id !== TARGET_CHANNEL_ID) return;
 
-    const trigger = message.content.charAt(0);
-    if (trigger !== '+' && trigger !== '-') return;
+    if (['!on', '!off', '!list', '!reset', '!restart'].includes(command)) {
+        await message.channel.sendTyping();
 
-    const contentWithoutTrigger = message.content.slice(1).trim();
-    const args = contentWithoutTrigger.split(/ +/);
-    const jumlahStr = args[0];
-    const keterangan = args.slice(1).join(' ') || 'No description';
+        let actionType = command.replace('!', '');
+        if (actionType === 'restart') actionType = 'reset';
 
-    const jumlah = parseFloat(jumlahStr);
+        // Ambil Display Name (Nickname server / Nama Profil Discord)
+        const displayName = message.member?.displayName || message.author.globalName || message.author.username;
 
-    if (isNaN(jumlah)) {
-        return message.reply('Format salah! Contoh penggunaan:\n`-50.50 starbucks` atau `+1500 salary` (Gunakan spasi setelah angka).');
-    }
+        try {
+            const response = await axios.post(APPS_SCRIPT_URL, {
+                action: actionType,
+                userId: message.author.id,
+                username: displayName
+            });
 
-    await message.channel.sendTyping();
+            const data = response.data;
 
-    try {
-        const response = await axios.post(APPS_SCRIPT_URL, {
-            tipe: trigger,
-            jumlah: jumlah,
-            keterangan: keterangan,
-            username: message.author.username
-        });
+            if (actionType === 'on') {
+                if (data === 'Ok') {
+                    return message.reply(`✅ **${displayName}** berhasil **ON DUTY**! Selamat bekerja.`);
+                }
+            } else if (actionType === 'off') {
+                if (data === 'BelumOn') {
+                    return message.reply(`⚠️ Kamu belum **ON DUTY** sebelumnya! Ketik \`!on\` dulu ya.`);
+                } else {
+                    return message.reply(`🔴 **${displayName}** telah **OFF DUTY**.\n⏱️ Durasi duty sesi ini: **${data} Menit**.`);
+                }
+            } else if (actionType === 'list') {
+                let listText = typeof data === 'string' ? data : JSON.stringify(data);
+                
+                if (listText.length > 1900) {
+                    listText = listText.substring(0, 1900) + '\n*(Data dipotong karena terlalu panjang)*';
+                }
+                return message.channel.send(`📋 **Daftar Durasi Mekanik:**\n${listText}`);
+            } else if (actionType === 'reset') {
+                return message.reply(`🔄 Data duty semua mekanik berhasil di-**RESET**!`);
+            }
 
-        if (response.data.status === 'success') {
-            const lastBalance = response.data.lastBalance;
-            const formatDollar = (angka) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(angka);
-
-            let embedResponse = {
-                color: trigger === '+' ? 0x00ff00 : 0xff0000,
-                title: trigger === '+' ? '📈 Income Recorded' : '📉 Expense Recorded',
-                fields: [
-                    { name: 'Amount', value: formatDollar(jumlah), inline: true },
-                    { name: 'Description', value: keterangan, inline: true },
-                    { name: 'By', value: message.author.username, inline: true },
-                    { name: 'Last Balance', value: `**${formatDollar(lastBalance)}**`, inline: false }
-                ],
-                timestamp: new Date()
-            };
-
-            message.reply({ embeds: [embedResponse] });
-        } else {
-            message.reply('Gagal mencatat keuangan ke Google Sheets. Silakan periksa konfigurasi Apps Script Anda.');
+        } catch (error) {
+            console.error("Error pada Apps Script:", error);
+            return message.reply('❌ Terjadi kesalahan saat berkomunikasi dengan database Google Sheets.');
         }
-
-    } catch (error) {
-        console.error(error);
-        message.reply('Terjadi kesalahan jaringan/error saat menghubungi Google Sheets.');
     }
 });
 
-// Menghubungkan bot menggunakan Token dari Railway
+// Login Bot
 client.login(process.env.DISCORD_TOKEN);
